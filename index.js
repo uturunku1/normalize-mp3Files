@@ -26,23 +26,32 @@ function execAwsCli(cmd) {
 }
 function getMp3FromS3(bucket) {
     const cmd = [`./cli/aws s3 cp s3://${bucket}/  /tmp --recursive`];
-    return execAwsCli(cmd).then((response)=>{
-        return normalizer.processAudios('/tmp');
-    }).catch((error)=>{
+    return execAwsCli(cmd).catch((error)=>{
         throw `Error while copying bucket ${bucket}.`;
     });
 }
+function callNormalizer(){
+    return new Promise((resolve, reject)=>{
+        console.log('calling normalizer...');
+        normalizer.processAudios('/tmp', (error, data) => {
+            if(error) reject(error);
+            resolve('audios have been saved in tmp');
+        });
+    });
+}
 function sendBackToS3(bucketDest) {
-    const cmd = [`./cli/aws s3 cp /tmp s3://${bucketDest}/ --recursive`];
+    const cmd = [`./cli/aws s3 cp /tmp s3://${bucketDest}/ --recursive --exclude "*" --include "*output"`];
     return execAwsCli(cmd).catch((err)=>{
         throw err +" could not upload to s3.";
     });
 }
 function alterMp3(bucketS, bucketDest) {
     getMp3FromS3(bucketS).then(function() {
+        callNormalizer();
+    }).then(function(result){
         return sendBackToS3(bucketDest);
     }).then(function(success) {
-        console.log("All done!");
+        console.log(`MP3 files are now available in ${bucketDest}`);
     }).catch(function(err) {
         console.log("It failed!", err);
     });

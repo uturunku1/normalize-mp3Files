@@ -48,7 +48,7 @@ function measureLoudness(mp3File) {
         cmd.push('-ac 2'); // not sure...
         cmd.push('-b:a 48k'); // Bitrate
         cmd.push('-ar 16000'); // Sample rate
-        cmd.push(`-y /tmp/output-${mp3File}`);
+        cmd.push(`-y /tmp/output${mp3File}`);
 
         return execCommand(cmd).catch((err) => {
             throw `Error when adjusting ${mp3File}`;
@@ -65,17 +65,9 @@ function measureLoudness(mp3File) {
         });
     }
     exports.processAudios = function(pathToFiles) {
-        const mp3Files= [];
         fs.readdirSync(pathToFiles).forEach(file => {
-            let promise = new Promise((resolve, reject)=>{
-                //skip hidden files
+                //skip hidden files and not mp3 ones
                 if(file[0] ==='.' || file[file.length -1]!='3') return;
-                processMp3File(file, function(err, data){
-                    if(err) reject(err);
-                    resolve('file added');
-                });
-            });
-            mp3Files.push(promise);
+                processMp3File(file);
         });
-        return Promise.all(mp3Files);
-    }
+    };
