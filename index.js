@@ -7,7 +7,9 @@ exports.handler=(event, context, callback)=>{
     const bucketSource = event.bucketSource;
     const bucketDestination = event.bucketDestination;
     console.log(`Processing audio(s) from bucket: ${bucketSource}`);
-    getMp3FromS3(bucketSource).then(() => processAudios('/tmp', bucketDestination));
+    getMp3FromS3(bucketSource).then((mp3Names) =>{
+        processAudios(mp3Names, bucketDestination);
+    });
 };
 
 function execCommand(cmd) {
@@ -18,16 +20,30 @@ function execCommand(cmd) {
         console.log('executing command:', cmd);
         child_process.exec(cmd, (error, stdout, stderr)=>{
             if(error) reject(error);
-            resolve(stderr);
+            resolve(stdout+stderr);
         })
     });
 }
 function getMp3FromS3(bucket) {
-    // const dirIn= '/tmp/mp3-input';
-    // const dirOut= '/tmp/mp3-output';
     const cmd = [`./cli/aws s3 cp s3://${bucket}/ /tmp --recursive`];
-    return execCommand(cmd).catch((error)=>{
-        throw `Error while copying bucket ${bucket}.`;
+    return execCommand(cmd).then((response) => {
+        //grab JSON str and make it into object
+        let lines= response.split('\n');
+        const mp3Names= [];
+        lines.forEach(function(line, index) {
+            if (line.includes('download')) {
+                let start= line.search('tmp/');
+                let name= line.slice(start+4, line.length);
+                mp3Names.push(name.trim());
+            }
+        });
+        console.log(mp3Names);
+        if (mp3Names === []) {
+          throw 'Unable to find name for MP3 in: '+response;
+        }
+        return mp3Names;
+    }).catch((error)=>{
+        throw `Error: ${error}`;
     });
 }
 function sendBackToS3(bucketDest) {
@@ -74,21 +90,24 @@ function adjustForAlexa(mp3File, i, tp, lra, thresh, offset){
         throw `Error when adjusting ${mp3File}`;
     });
 }
-function processAudios(pathToFiles, bucketDest) {
+function processAudios(mp3Names, bucketDest) {
     const filesNormalized=[];
-    fs.readdirSync(pathToFiles).forEach(file => {
+    console.log("mp3 names is processAudios: "+ mp3Names);
+    fs.readdirSync('/tmp').forEach(file=> {
         //skip hidden files and not mp3 ones
-        if(file[0] ==='.' || file[file.length -1]!='3') return;
-        let promise= new Promise((resolve, reject)=>{
-            measureLoudness(file).then((data)=>{
-                adjustForAlexa(file,data.input_i, data.input_tp, data.input_lra, data.input_thresh, data.target_offset);
-            }).then((success) => {
-                resolve(`${file} was normalized succesfully`);
-            }).catch((error)=>{
-                reject(error);
+        // if(file[0] ==='.' || file[file.length -1]!='3') return;
+        if (mp3Names.includes(file)) {
+            let promise= new Promise((resolve, reject)=>{
+                measureLoudness(file).then((data)=>{
+                    adjustForAlexa(file,data.input_i, data.input_tp, data.input_lra, data.input_thresh, data.target_offset);
+                }).then((success) => {
+                    resolve(`${file} was normalized succesfully`);
+                }).catch((error)=>{
+                    reject(error);
+                });
             });
-        });
-        filesNormalized.push(promise);
+            filesNormalized.push(promise);
+        }
     });
     Promise.all(filesNormalized).then(result=>{
         console.log(result);
