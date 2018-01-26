@@ -4,8 +4,8 @@ const fs = require('fs');
 const child_process= require('child_process');
 
 exports.handler=(event, context, callback)=>{
-    const bucketSource = event.bucketSource;
-    const bucketDestination = event.bucketDestination;
+    const bucketSource = 'mp3-bucket';
+    const bucketDestination = 'democracy-live';
     console.log(`Processing audio(s) from bucket: ${bucketSource}`);
     getMp3FromS3(bucketSource).then((mp3Names) =>{
         processAudios(mp3Names, bucketDestination);
@@ -37,7 +37,6 @@ function getMp3FromS3(bucket) {
                 mp3Names.push(name.trim());
             }
         });
-        console.log(mp3Names);
         if (mp3Names === []) {
           throw 'Unable to find name for MP3 in: '+response;
         }
@@ -56,7 +55,8 @@ function sendBackToS3(bucketDest) {
     });
 }
 function measureLoudness(mp3File) {
-    const cmd = [`./ffmpeg -i /tmp/${mp3File} -af loudnorm=I=-14:TP=-2:LRA=11:print_format=json -f null -`];
+    const cmd = [`./ffmpeg -i /tmp/${mp3File}`];
+    cmd.push(`-af loudnorm=I=-14:TP=-2:LRA=11:print_format=json -f null -`);
     return execCommand(cmd).then((response) => {
         //grab JSON str and make it into object
         let lines= response.split('\n');
@@ -73,44 +73,40 @@ function measureLoudness(mp3File) {
           throw 'Unable to find JSON response in: '+response;
         }
         return JSON.parse(lines.slice(start, end+1).join(''));
-    }).catch((error)=>{
+    }).catch((error) => {
         throw `Error interpreting ${mp3File}. Make sure ffmpeg is in your path.`;
     });
 }
-function adjustForAlexa(mp3File, i, tp, lra, thresh, offset){
-    const cmd=[`./ffmpeg -i /tmp/${mp3File}`];
-    cmd.push(`-af loudnorm=I=-14:TP=-2:LRA=11:measured_I=${i}:measured_TP=${tp}:measured_LRA=${lra}:measured_thresh=${thresh}:offset=${offset}:linear=true`);
-    cmd.push('-codec:a libmp3lame'); // Format
-    cmd.push('-ac 2'); // not sure...
-    cmd.push('-b:a 48k'); // Bitrate
-    cmd.push('-ar 16000'); // Sample rate
-    cmd.push(`-y /tmp/${mp3File}`);
+function adjustForAlexa(file, I, TP, LRA, threshold, offset) {
+  const cmd = [`./ffmpeg -i /tmp/${file}`];
+  cmd.push(`-af loudnorm=I=-14:TP=-2:LRA=11:measured_I=${I}:measured_TP=${TP}:measured_LRA=${LRA}:measured_thresh=${threshold}:offset=${offset}:linear=true`);
+  cmd.push('-codec:a libmp3lame'); // Format
+  cmd.push('-ac 2'); // not sure...
+  cmd.push('-b:a 48k'); // Bitrate
+  cmd.push('-ar 16000'); // Sample rate
+  cmd.push(`-y /tmp/output-${file}`);
 
-    return execCommand(cmd).catch((err) => {
-        throw `Error when adjusting ${mp3File}`;
-    });
+  return execCommand(cmd).catch((err) => {
+    throw 'Error converting: '+file;
+  });
 }
 function processAudios(mp3Names, bucketDest) {
     const filesNormalized=[];
-    console.log("mp3 names is processAudios: "+ mp3Names);
-    fs.readdirSync('/tmp').forEach(file=> {
-        //skip hidden files and not mp3 ones
-        // if(file[0] ==='.' || file[file.length -1]!='3') return;
-        if (mp3Names.includes(file)) {
-            let promise= new Promise((resolve, reject)=>{
-                measureLoudness(file).then((data)=>{
-                    adjustForAlexa(file,data.input_i, data.input_tp, data.input_lra, data.input_thresh, data.target_offset);
+        mp3Names.forEach(function(file){
+            let promise= new Promise((resolve,reject)=>{
+                measureLoudness(file).then((data) => {
+                  return adjustForAlexa(file, data.input_i, data.input_tp, data.input_lra, data.input_thresh, data.target_offset);
                 }).then((success) => {
-                    resolve(`${file} was normalized succesfully`);
-                }).catch((error)=>{
-                    reject(error);
+                  console.log(file + ' processed.');
+                  resolve('done reading');
+                }).catch((err) => {
+                  console.error(err);
                 });
             });
             filesNormalized.push(promise);
-        }
-    });
-    Promise.all(filesNormalized).then(result=>{
-        console.log(result);
-        return sendBackToS3(bucketDest);
-    });
+        });
+        Promise.all(filesNormalized).then(result=>{
+            console.log('last step');
+            return sendBackToS3(bucketDest);
+        });
 }
